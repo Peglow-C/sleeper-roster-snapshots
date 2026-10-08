@@ -13,6 +13,7 @@ sleeper-roster-snapshots/
   data/                        not in git (only on disk and in backups)
     rosters/                   snapshots, <league-slug>_<date>.json
     players_cache.json         Sleeper player list, refreshed once a day
+    snapshot.log               output of the weekly cron job
     inbox/  archive/
 ```
 
@@ -48,6 +49,20 @@ python3 sleeper_roster_snapshot.py --username <sleeper-username>
 | `--season` | NFL season year (default: current year) |
 | `--league-id` | Only snapshot this league; repeat for several (default: all leagues) |
 | `--outdir` | Output directory (default: `data/rosters`) |
+
+### Weekly snapshot (cron)
+
+A cron job takes a snapshot every Wednesday at 12:00 PM, after waivers have processed. Add it with `crontab -e` as the user that owns the project folder:
+
+```cron
+# Every Wednesday at 12:00 PM, after waivers
+0 12 * * 3  cd <path/to/sleeper-roster-snapshots> && .venv/bin/python sleeper_roster_snapshot.py --username <sleeper-username> >> data/snapshot.log 2>&1
+```
+
+- Calling `.venv/bin/python` directly uses the virtualenv without activating it, so cron's minimal environment doesn't matter.
+- Output from each run is appended to `data/snapshot.log`.
+- Cron uses the machine's local time. Check the timezone with `timedatectl`.
+- If the machine is off at the scheduled time, that week's snapshot is skipped.
 
 ### Diff
 
