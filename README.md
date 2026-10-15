@@ -50,19 +50,20 @@ python3 sleeper_roster_snapshot.py --username <sleeper-username>
 | `--league-id` | Only snapshot this league; repeat for several (default: all leagues) |
 | `--outdir` | Output directory (default: `data/rosters`) |
 
-### Weekly snapshot (cron)
+### Scheduled snapshots (cron)
 
-A cron job takes a snapshot every Wednesday at 12:00 PM, after waivers have processed. Add it with `crontab -e` as the user that owns the project folder:
+A cron job takes a snapshot at 19:00 (Central European time) on Sunday, Monday, Tuesday, Wednesday and Friday. 19:00 is the Sunday 1 PM ET kickoff. Add it with `crontab -e` as the user that owns the project folder, on the machine that runs the snapshots:
 
 ```cron
-# Every Wednesday at 12:00 PM, after waivers
-0 12 * * 3  cd <path/to/sleeper-roster-snapshots> && .venv/bin/python sleeper_roster_snapshot.py --username <sleeper-username> >> data/snapshot.log 2>&1
+# 19:00 on Sun, Mon, Tue, Wed and Fri (0 = Sunday)
+0 19 * * 0-3,5  cd <path/to/sleeper-roster-snapshots> && .venv/bin/python sleeper_roster_snapshot.py --username <sleeper-username> >> data/snapshot.log 2>&1
 ```
 
 - Calling `.venv/bin/python` directly uses the virtualenv without activating it, so cron's minimal environment doesn't matter.
 - Output from each run is appended to `data/snapshot.log`.
-- Cron uses the machine's local time. Check the timezone with `timedatectl`.
-- If the machine is off at the scheduled time, that week's snapshot is skipped.
+- Cron uses the machine's local time, so the machine must be on `Europe/Berlin` or a similar zone. Check it with `timedatectl` and set it with `sudo timedatectl set-timezone Europe/Berlin`.
+- Europe leaves daylight saving time one week before the US does. In that week, 1 PM ET is 18:00, so the Sunday snapshot runs an hour after kickoff.
+- If the machine is off at the scheduled time, that snapshot is skipped.
 
 ### Diff
 
