@@ -1,0 +1,7 @@
+{
+  "enabledPlugins": {
+    "dev@ragenus": true,
+    "ponytail@ragenus": true,
+    "interview@ragenus": true
+  }
+}
