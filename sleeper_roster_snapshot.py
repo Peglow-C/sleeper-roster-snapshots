@@ -17,14 +17,20 @@ Usage:
     python3 sleeper_roster_snapshot.py --username YOUR_SLEEPER_USERNAME \
         --season 2026 --outdir </path/to/roster/directory>
 
+Optional: set DISCORD_WEBHOOK_URL (and DISCORD_FAIL_USER_ID /
+DISCORD_SUCCESS_USER_ID) in .env to post a failure or OK message to
+Discord after each run. See .env.example.
+
 Requires: requests   (pip install requests)
 """
 
 import argparse
 import json
+import os
 import re
+import socket
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import requests
@@ -35,6 +41,41 @@ API_BASE = "https://api.sleeper.app/v1"
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTDIR = str(BASE_DIR / "data" / "rosters")
 PLAYERS_CACHE_PATH = BASE_DIR / "data" / "players_cache.json"
+ENV_PATH = BASE_DIR / ".env"
+DISCORD_MAX_LEN = 2000
+
+
+def load_env(path: Path):
+    """Read KEY=VALUE lines from .env. Variables already set in the environment win."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+def notify_discord(text: str, user_id: str = ""):
+    """Post to the configured webhook, mentioning user_id if given. No webhook, no post."""
+    url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not url:
+        return
+    content = f"<@{user_id}> {text}" if user_id else text
+    payload = {
+        "content": content[:DISCORD_MAX_LEN],
+        # Only ever ping the configured user, never @everyone or roles.
+        "allowed_mentions": {"users": [user_id]} if user_id else {"parse": []},
+    }
+    try:
+        requests.post(url, json=payload, timeout=15).raise_for_status()
+    except requests.RequestException as e:
+        print(f"Warning: Discord notification failed: {e}", file=sys.stderr)
+
+
+def run_label() -> str:
+    return f"on {socket.gethostname()} at {datetime.now():%Y-%m-%d %H:%M}"
 
 
 def get_json(url: str):
@@ -103,7 +144,7 @@ def snapshot_league(league: dict, my_user_id: str, players: dict, outdir: Path):
     my_roster = next((r for r in rosters if r.get("owner_id") == my_user_id), None)
     if my_roster is None:
         print(f"  Warning: couldn't find your roster in league '{league_name}', skipping.")
-        return
+        return None
 
     def player_info(pid: str):
         p = players.get(pid, {})
@@ -140,23 +181,18 @@ def snapshot_league(league: dict, my_user_id: str, players: dict, outdir: Path):
     }
 
     outdir.mkdir(parents=True, exist_ok=True)
-    filename = f"{slugify(league_name)}_{date.today().isoformat()}.json"
+    slug = slugify(league_name)
+    filename = f"{slug}_{date.today().isoformat()}.json"
     outpath = outdir / filename
     with open(outpath, "w") as f:
         json.dump(snapshot, f, indent=2)
 
     print(f"  Wrote {outpath}")
+    return slug
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Snapshot your Sleeper roster(s) to dated JSON files.")
-    parser.add_argument("--username", required=True, help="Your Sleeper username")
-    parser.add_argument("--season", default=str(date.today().year), help="NFL season year (default: current year)")
-    parser.add_argument("--league-id", action="append", dest="league_ids",
-                         help="Only snapshot this league_id. Repeatable. Defaults to all leagues for the season.")
-    parser.add_argument("--outdir", default=DEFAULT_OUTDIR, help="Directory to write snapshot files into")
-    args = parser.parse_args()
-
+def snapshot_all(args, written: list, skipped: list):
+    """Snapshot every matching league, recording league slugs written and league names skipped."""
     outdir = Path(args.outdir)
 
     print(f"Looking up Sleeper user '{args.username}'...")
@@ -174,8 +210,51 @@ def main():
 
     for league in leagues:
         print(f"Snapshotting '{league['name']}'...")
-        snapshot_league(league, user_id, players, outdir)
+        slug = snapshot_league(league, user_id, players, outdir)
+        if slug:
+            written.append(slug)
+        else:
+            skipped.append(league["name"])
 
+
+def notify_failure(error: str, written: list, skipped: list):
+    lines = [f"Roster snapshot failed {run_label()}", f"Error: {error}"]
+    if written:
+        lines.append(f"Written: {', '.join(written)}")
+    if skipped:
+        lines.append(f"Skipped: {', '.join(skipped)}")
+    lines.append("See data/snapshot.log for details.")
+    notify_discord("\n".join(lines), os.environ.get("DISCORD_FAIL_USER_ID", ""))
+
+
+def main():
+    load_env(ENV_PATH)
+    parser = argparse.ArgumentParser(description="Snapshot your Sleeper roster(s) to dated JSON files.")
+    parser.add_argument("--username", required=True, help="Your Sleeper username")
+    parser.add_argument("--season", default=str(date.today().year), help="NFL season year (default: current year)")
+    parser.add_argument("--league-id", action="append", dest="league_ids",
+                         help="Only snapshot this league_id. Repeatable. Defaults to all leagues for the season.")
+    parser.add_argument("--outdir", default=DEFAULT_OUTDIR, help="Directory to write snapshot files into")
+    args = parser.parse_args()
+
+    written, skipped = [], []
+    try:
+        snapshot_all(args, written, skipped)
+    except (Exception, SystemExit) as e:
+        if isinstance(e, SystemExit) and not e.code:
+            raise
+        # SystemExit carries the message of sys.exit("..."); re-raise so the
+        # exit code and the traceback in the log stay as they were.
+        error = str(e) if isinstance(e, SystemExit) else f"{type(e).__name__}: {e}"
+        notify_failure(error, written, skipped)
+        raise
+
+    if skipped:
+        notify_failure("couldn't find your roster in some leagues", written, skipped)
+        sys.exit(f"Skipped leagues: {', '.join(skipped)}")
+
+    notify_discord(f"Roster snapshot OK {run_label()}: {', '.join(written)}",
+                   os.environ.get("DISCORD_SUCCESS_USER_ID", ""))
     print("Done.")
 
 

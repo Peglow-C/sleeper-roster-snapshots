@@ -8,7 +8,9 @@ Scripts that take snapshots of my Sleeper fantasy football rosters and compare t
 sleeper-roster-snapshots/
   sleeper_roster_snapshot.py   saves the current roster of each league as JSON
   sleeper_roster_diff.py       compares two snapshots of a league
+  test_sleeper_roster_snapshot.py  tests for the snapshot script
   requirements.txt
+  .env.example                 template for .env (Discord settings)
   docs/                        Sleeper API documentation
   data/                        not in git (only on disk and in backups)
     rosters/                   snapshots, <league-slug>_<date>.json
@@ -65,6 +67,30 @@ A cron job takes a snapshot at 19:00 (Central European time) on Sunday, Monday, 
 - Europe leaves daylight saving time one week before the US does. In that week, 1 PM ET is 18:00, so the Sunday snapshot runs an hour after kickoff.
 - If the machine is off at the scheduled time, that snapshot is skipped.
 
+### Discord notifications
+
+After every run, the snapshot script can post to a Discord channel. It posts a failure message if any league failed or was skipped, and a short OK message otherwise. If no message arrives at the scheduled time, the job didn't run.
+
+1. In Discord, open **Server settings → Integrations → Webhooks**, create a webhook for the channel, and copy its URL.
+2. Copy the template and fill it in:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   | Key | Meaning |
+   |---|---|
+   | `DISCORD_WEBHOOK_URL` | Webhook URL. Empty means no messages are sent. |
+   | `DISCORD_FAIL_USER_ID` | User to mention on failure. Empty means no mention. |
+   | `DISCORD_SUCCESS_USER_ID` | User to mention on success. Empty means no mention. |
+
+3. To get a user ID, turn on **User settings → Advanced → Developer Mode**, then right-click the user and choose **Copy User ID**.
+
+- The script reads `.env` itself, so the cron line doesn't change. Variables already set in the environment take precedence.
+- `.env` is in `.gitignore`. Anyone with the webhook URL can post to the channel, so don't commit it.
+- A run with a skipped league (your roster wasn't found) still writes the other leagues, but it counts as failed and exits with an error code.
+- If Discord can't be reached, the script logs a warning, and its result and exit code don't change.
+
 ### Diff
 
 ```bash
@@ -78,6 +104,14 @@ python3 sleeper_roster_diff.py data/rosters/hardknocks_2026-09-16.json data/rost
 - The league slug is the file name before the date, for example `hardknocks` or `twelve-bolievers`.
 - Prints adds, drops, moves between starters, bench, taxi and IR, and record and points changes.
 - `--out diff.json` also writes the diff as JSON.
+
+## Tests
+
+```bash
+.venv/bin/python -m unittest
+```
+
+The tests run the snapshot script end to end, with Sleeper and Discord faked. They never read `.env`.
 
 ## Reference
 
