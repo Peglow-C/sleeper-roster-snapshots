@@ -54,6 +54,7 @@ def load_env(path: Path):
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
+        value = re.split(r"\s+#", value, maxsplit=1)[0]  # drop a trailing comment
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
@@ -68,10 +69,15 @@ def notify_discord(text: str, user_id: str = ""):
         # Only ever ping the configured user, never @everyone or roles.
         "allowed_mentions": {"users": [user_id]} if user_id else {"parse": []},
     }
+    # Never log the exception text itself: requests puts the webhook URL,
+    # which contains its token, into it.
     try:
-        requests.post(url, json=payload, timeout=15).raise_for_status()
+        resp = requests.post(url, json=payload, timeout=15)
+        resp.raise_for_status()
+    except requests.HTTPError:
+        print(f"Warning: Discord notification failed: {resp.status_code} {resp.text[:300]}", file=sys.stderr)
     except requests.RequestException as e:
-        print(f"Warning: Discord notification failed: {e}", file=sys.stderr)
+        print(f"Warning: Discord notification failed: {type(e).__name__}", file=sys.stderr)
 
 
 def run_label() -> str:

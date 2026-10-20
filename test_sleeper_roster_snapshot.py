@@ -57,6 +57,7 @@ class SnapshotRunTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.post = mock.Mock()
+        self.stderr = io.StringIO()
         for patcher in (
             # Never read the real .env, so tests can't post to a real webhook.
             mock.patch.object(snap, "ENV_PATH", self.tmp / "no.env"),
@@ -72,7 +73,7 @@ class SnapshotRunTest(unittest.TestCase):
                 mock.patch.object(sys, "argv", argv), \
                 mock.patch.object(snap.requests, "get", fake_sleeper(**sleeper)), \
                 contextlib.redirect_stdout(io.StringIO()), \
-                contextlib.redirect_stderr(io.StringIO()):
+                contextlib.redirect_stderr(self.stderr):
             try:
                 snap.main()
             except SystemExit as e:
@@ -161,6 +162,29 @@ class SnapshotRunTest(unittest.TestCase):
 
         self.assertNotEqual(code, 0)
         self.assertEqual(self.post.call_count, 1)
+
+    def test_rejected_webhook_logs_discords_reason_but_not_the_url(self):
+        resp = mock.Mock(status_code=400, text='{"allowed_mentions": ["Invalid snowflake"]}')
+        resp.raise_for_status.side_effect = requests.HTTPError(f"400 Client Error: Bad Request for url: {WEBHOOK}")
+        self.post.return_value = resp
+
+        code = self.run_main(env={"DISCORD_WEBHOOK_URL": WEBHOOK})
+
+        self.assertEqual(code, 0)
+        log = self.stderr.getvalue()
+        self.assertIn("400", log)
+        self.assertIn("Invalid snowflake", log)
+        self.assertNotIn(WEBHOOK, log)
+        self.assertNotIn("abc", log)
+
+    def test_env_file_ignores_trailing_comments(self):
+        (self.tmp / ".env").write_text(f"DISCORD_WEBHOOK_URL={WEBHOOK}\nDISCORD_SUCCESS_USER_ID=111  # me\n")
+        with mock.patch.object(snap, "ENV_PATH", self.tmp / ".env"):
+            self.run_main()
+
+        [payload] = self.posted()
+        self.assertTrue(payload["content"].startswith("<@111> "))
+        self.assertEqual(payload["allowed_mentions"], {"users": ["111"]})
 
     def test_env_file_configures_webhook(self):
         (self.tmp / ".env").write_text(f'# comment\nDISCORD_WEBHOOK_URL="{WEBHOOK}"\nDISCORD_SUCCESS_USER_ID=\n')
